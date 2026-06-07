@@ -1,0 +1,15 @@
+{
+  "name": "alzheimers-research-care-operations-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sidebar-based Alzheimer's research, clinical trial, care coordination, and monitoring operations hub.",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "health": "node -e \"fetch('http://localhost:5311/api/health').then(r=>r.json()).then(console.log)\"",
+    "test": "node scripts/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
