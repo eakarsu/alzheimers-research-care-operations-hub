@@ -1,17 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PORT="${PORT:-5311}"
+cd "$(dirname "$0")"
 
-if command -v lsof >/dev/null 2>&1; then
-  PIDS="$(lsof -ti tcp:"$PORT" || true)"
-  if [ -n "$PIDS" ]; then
-    echo "Stopping existing process on port $PORT: $(echo "$PIDS" | tr '\n' ' ')"
-    kill $PIDS || true
-    sleep 1
-  fi
+# Local/test acceptance uses a real database account and an ephemeral signing
+# key. Production remains organization-SSO-only.
+if [[ "${NODE_ENV:-development}" == "test" && -z "${ENABLE_LOCAL_PASSWORD_AUTH:-}" ]]; then
+  export ENABLE_LOCAL_PASSWORD_AUTH=true
 fi
 
-cd "$(dirname "$0")"
-echo "Starting Alzheimer's Research & Care Operations Hub on http://localhost:$PORT"
-PORT="$PORT" node server.js
+case "${1:-start}" in
+  check) exec npm run check ;;
+  migrate)
+    if [[ "${ALLOW_SCHEMA_MIGRATION:-0}" != "1" ]]; then
+      echo "Refusing migration: set ALLOW_SCHEMA_MIGRATION=1 explicitly" >&2
+      exit 1
+    fi
+    exec npm run migrate
+    ;;
+  start) exec npm start ;;
+  *) echo "Usage: $0 [check|migrate|start]" >&2; exit 64 ;;
+esac

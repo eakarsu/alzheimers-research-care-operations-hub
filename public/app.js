@@ -7,8 +7,8 @@ const state = {
   status: 'all',
   formMode: 'view',
   form: {},
-  user: JSON.parse(localStorage.getItem('alz_user') || 'null'),
-  token: localStorage.getItem('alz_token') || ''
+  user: null,
+  token: sessionStorage.getItem('alz_token') || ''
 };
 
 function esc(value) {
@@ -30,6 +30,7 @@ async function api(path, options = {}) {
     ...options,
     headers: {
       'Content-Type': 'application/json',
+      ...(state.token ? { Authorization: `Bearer ${state.token}` } : {}),
       ...(options.headers || {})
     }
   });
@@ -41,25 +42,12 @@ async function api(path, options = {}) {
 
 async function login(event) {
   event.preventDefault();
-  const form = new FormData(event.target);
-  try {
-    const result = await api('/api/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email: form.get('email'), password: form.get('password') })
-    });
-    state.user = result.user;
-    state.token = result.token;
-    localStorage.setItem('alz_user', JSON.stringify(result.user));
-    localStorage.setItem('alz_token', result.token);
-    await load();
-  } catch (err) {
-    document.querySelector('.login-error').textContent = err.message;
-  }
+  window.location.assign('/api/auth/sso');
 }
 
-function logout() {
-  localStorage.removeItem('alz_user');
-  localStorage.removeItem('alz_token');
+async function logout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  sessionStorage.removeItem('alz_token');
   state.user = null;
   state.token = '';
   state.boot = null;
@@ -122,12 +110,9 @@ function renderLogin() {
       <h1>Alzheimer's Research & Care Hub</h1>
       <p class="muted">Sign in to manage registry, trials, documents, care operations, and AI review workflows.</p>
       <form onsubmit="login(event)" class="login-form">
-        <label>Email<input name="email" value="admin@alzheimers.local" autocomplete="username"></label>
-        <label>Password<input name="password" type="password" value="admin123" autocomplete="current-password"></label>
-        <button class="button" type="submit">Sign In</button>
-        <div class="login-error"></div>
+        <button class="button" type="submit">Continue with organization SSO</button>
+        <div class="login-error">MFA and your assigned least-privilege role are required.</div>
       </form>
-      <p class="muted small">Demo users: admin@alzheimers.local / admin123, clinician@alzheimers.local / clinician123, coordinator@alzheimers.local / coordinator123</p>
     </main>
   `;
 }
@@ -150,8 +135,8 @@ function renderShell(inner) {
         <p>Research operations, trial matching, cognitive tracking, monitoring, documents, consent, and caregiver coordination.</p>
       </div>
       <div class="user-box">
-        <strong>${esc(state.user.name)}</strong>
-        <span>${esc(state.user.role)}</span>
+        <strong>${esc(state.user.email || state.user.subject)}</strong>
+        <span>${esc(state.user.role)} · tenant scoped</span>
         <button onclick="logout()">Sign out</button>
       </div>
       <div class="nav-label">Workspace</div>
@@ -221,7 +206,7 @@ function renderDashboard() {
         </article>
         <article class="panel">
           <h3>Production Features Added</h3>
-          <p class="muted">Login, role-aware users, persistent JSON storage, CRUD editing, CSV export, document upload metadata, consent governance, task queues, notifications, audit logging, and real-AI-ready endpoints are now implemented.</p>
+          <p class="muted">OIDC/SAML gateway identity with MFA, tenant and role boundaries, encrypted PostgreSQL records, purpose-scoped consent, immutable audit, durable provider retries, monitored exports, and independent clinical AI approval are active.</p>
         </article>
       </div>
     </section>
@@ -230,6 +215,13 @@ function renderDashboard() {
 
 function makeBlankRow(module) {
   const sample = (state.boot.data[module.table] || [])[0] || {};
+  const templates = {
+    patients: { patient: '', dateOfBirth: '', stage: '', ageBand: '', sourceSystem: '', sourcePatientId: '' },
+    consentRecords: { patientId: '', purpose: 'care-operations', validUntil: '', source: '' },
+    documents: { patientId: '', fileName: '', documentType: '', contentSha256: '', retentionUntil: '' },
+    tasks: { patientId: '', task: '', owner: '', dueDate: '', priority: 'Medium', status: 'Open' }
+  };
+  if (!Object.keys(sample).length && templates[module.table]) return { ...templates[module.table] };
   const blank = {};
   Object.keys(sample).forEach((key) => {
     if (key === 'id') return;
@@ -257,10 +249,32 @@ function updateForm(key, value) {
 }
 
 async function saveForm(table) {
-  const body = { ...state.form, actor: state.user.email };
+  const body = { ...state.form };
+  if (table === 'patients') {
+    const { id, version, sourceSystem, sourcePatientId, ...profile } = body;
+    if (state.formMode === 'new') await api('/api/patients', { method: 'POST', body: JSON.stringify({ sourceSystem, sourcePatientId, profile }) });
+    else {
+      const correctionReason = prompt('Reason for this patient correction:');
+      if (!correctionReason) return;
+      await api(`/api/patients/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ version, profile, correctionReason }) });
+    }
+    state.formMode = 'view'; state.form = {}; await refresh(); return;
+  }
+  if (table === 'consentRecords') {
+    if (state.formMode !== 'new') throw new Error('Consent is immutable; revoke it and record a new consent instead.');
+    await api('/api/consents', { method: 'POST', body: JSON.stringify(body) });
+    state.formMode = 'view'; state.form = {}; await refresh(); return;
+  }
+  if (table === 'documents') {
+    if (state.formMode !== 'new') throw new Error('Document metadata is immutable after reservation.');
+    await api('/api/documents', { method: 'POST', body: JSON.stringify(body) });
+    state.formMode = 'view'; state.form = {}; await refresh(); return;
+  }
   if (state.formMode === 'new') {
     await api(`/api/table/${table}`, { method: 'POST', body: JSON.stringify(body) });
   } else {
+    body.correctionReason = prompt('Reason for this clinical correction:');
+    if (!body.correctionReason) return;
     await api(`/api/table/${table}/${encodeURIComponent(state.form.id)}`, { method: 'PUT', body: JSON.stringify(body) });
   }
   state.formMode = 'view';
@@ -270,7 +284,15 @@ async function saveForm(table) {
 
 async function deleteSelected(table, row) {
   if (!row || !confirm(`Delete ${row.id}?`)) return;
-  await api(`/api/table/${table}/${encodeURIComponent(row.id)}?actor=${encodeURIComponent(state.user.email)}`, { method: 'DELETE' });
+  if (table === 'patients') return alert('Patient deletion requires the governed correction/deletion propagation process; direct deletion is disabled.');
+  if (table === 'consentRecords') {
+    await api(`/api/consents/${encodeURIComponent(row.id)}/revoke`, { method: 'POST', body: JSON.stringify({ version: row.version }) });
+    state.selected = null; await refresh(); return;
+  }
+  if (table === 'documents') return alert('Document deletion is restricted by retention and legal hold and requires an administrator.');
+  const reason = prompt('Reason for deletion and source-system propagation:');
+  if (!reason) return;
+  await api(`/api/table/${table}/${encodeURIComponent(row.id)}?reason=${encodeURIComponent(reason)}`, { method: 'DELETE' });
   state.selected = null;
   await refresh();
 }
@@ -278,15 +300,14 @@ async function deleteSelected(table, row) {
 async function uploadDocument(event) {
   event.preventDefault();
   const form = new FormData(event.target);
-  await api('/api/upload', {
+  await api('/api/documents', {
     method: 'POST',
     body: JSON.stringify({
-      actor: state.user.email,
       patientId: form.get('patientId'),
-      patient: form.get('patient'),
       documentType: form.get('documentType'),
       fileName: form.get('fileName'),
-      reviewer: form.get('reviewer')
+      contentSha256: form.get('contentSha256'),
+      retentionUntil: form.get('retentionUntil')
     })
   });
   event.target.reset();
@@ -294,12 +315,14 @@ async function uploadDocument(event) {
 }
 
 function renderForm(module, selected) {
+  const readOnlyRole = state.user.role === 'researcher' || state.user.role === 'caregiver';
+  const immutableEdit = module.table === 'consentRecords' || module.table === 'documents';
   if (state.formMode === 'view') {
     return `
       <div class="button-row">
-        <button class="button" onclick="addNew('${module.id}')">Add Record</button>
-        <button class="button secondary" onclick="editSelected(moduleById('${module.id}'), ${selected ? `state.boot.data['${module.table}'].find(r=>r.id==='${selected.id}')` : 'null'})" ${selected ? '' : 'disabled'}>Edit</button>
-        <button class="button danger" onclick="deleteSelected('${module.table}', ${selected ? `state.boot.data['${module.table}'].find(r=>r.id==='${selected.id}')` : 'null'})" ${selected ? '' : 'disabled'}>Delete</button>
+        <button class="button" onclick="addNew('${module.id}')" ${readOnlyRole || module.table === 'auditRecords' ? 'disabled' : ''}>Add Record</button>
+        <button class="button secondary" onclick="editSelected(moduleById('${module.id}'), ${selected ? `state.boot.data['${module.table}'].find(r=>r.id==='${selected.id}')` : 'null'})" ${selected && !readOnlyRole && !immutableEdit && module.table !== 'auditRecords' ? '' : 'disabled'}>Edit</button>
+        <button class="button danger" onclick="deleteSelected('${module.table}', ${selected ? `state.boot.data['${module.table}'].find(r=>r.id==='${selected.id}')` : 'null'})" ${selected && !readOnlyRole && module.table !== 'auditRecords' ? '' : 'disabled'}>${module.table === 'consentRecords' ? 'Revoke' : 'Delete'}</button>
         <a class="button secondary" href="/api/export/${module.table}">CSV Export</a>
       </div>
     `;
@@ -330,11 +353,11 @@ function renderUpload(module) {
       <h3>Upload Document Metadata</h3>
       <form class="form-grid compact" onsubmit="uploadDocument(event)">
         <label>Patient ID<input name="patientId" placeholder="ALZ-P-01"></label>
-        <label>Patient<input name="patient" placeholder="Patient name"></label>
         <label>Document Type<input name="documentType" placeholder="MRI report"></label>
         <label>File Name<input name="fileName" placeholder="report.pdf"></label>
-        <label>Reviewer<input name="reviewer" placeholder="Neurologist"></label>
-        <button class="button" type="submit">Add Upload</button>
+        <label>SHA-256 checksum<input name="contentSha256" minlength="64" maxlength="64" required></label>
+        <label>Retain until<input name="retentionUntil" type="date" required></label>
+        <button class="button" type="submit">Reserve encrypted upload</button>
       </form>
     </article>
   `;
@@ -359,7 +382,7 @@ function renderModule(module) {
           <select onchange="state.status=this.value; render();">
             ${['all', 'review', 'pending', 'ready', 'high', 'stable', 'complete', 'open', 'blocked', 'active'].map((x) => `<option value="${x}" ${state.status === x ? 'selected' : ''}>${x === 'all' ? 'All statuses' : x}</option>`).join('')}
           </select>
-          <button class="button" onclick="addNew('${module.id}')">Add</button>
+          <button class="button" onclick="addNew('${module.id}')" ${state.user.role === 'researcher' || state.user.role === 'caregiver' || module.table === 'auditRecords' ? 'disabled' : ''}>Add</button>
         </div>
         <div class="table-wrap">
           <table>
@@ -399,54 +422,70 @@ function renderModule(module) {
   `;
 }
 
-async function generateAiReview() {
-  const result = await api('/api/ai-center', {
+async function generateAiReview(event) {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const result = await api('/api/ai/reviews', {
     method: 'POST',
-    body: JSON.stringify({ user: state.user, data: state.boot.data })
+    body: JSON.stringify({
+      patientId: form.get('patientId'), intendedUse: form.get('intendedUse'),
+      model: form.get('model'), modelVersion: form.get('modelVersion'),
+      uncertainty: form.get('uncertainty'), prompt: form.get('prompt'), output: form.get('output'),
+      evidence: [{ title: form.get('evidenceTitle'), uri: form.get('evidenceUri'), excerpt: form.get('evidenceExcerpt') }]
+    })
   });
-  alert(result.text || result.note || 'AI review generated with local fallback.');
+  alert(`Draft ${result.review.id} recorded. It is not actionable until independent clinician approval.`);
+  await refresh();
+}
+
+async function decideAi(id, decision) {
+  const reason = prompt(`Clinical reason to ${decision} this draft:`);
+  if (!reason) return;
+  await api(`/api/ai/reviews/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ decision, reason }) });
+  await refresh();
+}
+
+async function registerModel(event) {
+  event.preventDefault(); const form = new FormData(event.target);
+  await api('/api/ai/models', { method: 'POST', body: JSON.stringify({ model: form.get('model'), modelVersion: form.get('modelVersion'), intendedUse: form.get('intendedUse') }) });
+  event.target.reset(); await refresh();
+}
+
+async function evaluateModel(event) {
+  event.preventDefault(); const form = new FormData(event.target);
+  await api(`/api/ai/models/${encodeURIComponent(form.get('releaseId'))}/evaluations`, { method: 'POST', body: JSON.stringify({
+    evaluationSetSha256: form.get('evaluationSetSha256'), evidenceUri: form.get('evidenceUri'), passed: form.get('passed') === 'true',
+    metrics: { groundedCitationRate: Number(form.get('groundedCitationRate')), unsafeRecommendationRate: Number(form.get('unsafeRecommendationRate')) },
+    thresholds: { groundedCitationRate: Number(form.get('minimumGroundedRate')), unsafeRecommendationRate: Number(form.get('maximumUnsafeRate')) }
+  }) });
+  event.target.reset(); await refresh();
 }
 
 function renderAiCenter() {
   const ai = state.boot.aiCenter;
+  const reviews = state.boot.data.aiReviews || [];
+  const models = state.boot.data.aiModels || [];
   return `
-    ${topbar('AI Center', 'Professional AI summaries for case review, trial-fit explanation, and care-plan drafting. Raw JSON is converted into reviewable clinical operations sections.', 'AI Review')}
-    <section class="content">
-      <div class="button-row ai-actions">
-        <button class="button" onclick="generateAiReview()">Generate Review</button>
-        <span class="pill">${esc(ai.mode)}</span>
-        <span class="muted">Model: ${esc(ai.model)}</span>
-      </div>
-      <div class="ai-layout">
-        <article class="ai-section">
-          <h3>Case Review</h3>
-          <p class="eyebrow">${esc(ai.caseReview.patient)}</p>
-          <h2>${esc(ai.caseReview.headline)}</h2>
-          <p>${esc(ai.caseReview.summary)}</p>
-          <p><span class="pill ${statusClass(ai.caseReview.confidence)}">Confidence: ${esc(ai.caseReview.confidence)}</span></p>
-          <h3>Risk Flags</h3>
-          <ul class="ai-list">${ai.caseReview.riskFlags.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-        </article>
-        <article class="ai-section">
-          <h3>Next Actions</h3>
-          <ul class="ai-list">${ai.caseReview.nextActions.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-          <p class="muted">${esc(ai.disclaimer)}</p>
-        </article>
-        <article class="ai-section">
-          <h3>Trial Fit Explanation</h3>
-          <p><strong>${esc(ai.trialFit.study)}</strong></p>
-          <p>Match score: <span class="pill ready">${esc(ai.trialFit.score)}</span></p>
-          <p>${esc(ai.trialFit.explanation)}</p>
-          <h3>Blockers</h3>
-          <ul class="ai-list">${ai.trialFit.blockers.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-        </article>
-        <article class="ai-section">
-          <h3>Care Plan Draft</h3>
-          <p>${esc(ai.carePlanDraft.focus)}</p>
-          <ul class="ai-list">${ai.carePlanDraft.tasks.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>
-          <p class="muted">Owner routing: ${esc(ai.carePlanDraft.ownerRouting.join(', '))}</p>
-        </article>
-      </div>
+    ${topbar('AI Center', 'Grounded drafts with model lineage, uncertainty, and a hard independent-clinician approval gate.', 'AI Governance')}
+    <section class="content grid">
+      <article class="panel"><strong>${esc(ai.mode)}</strong><p class="muted">${esc(ai.disclaimer)}</p></article>
+      ${state.user.role === 'administrator' ? `<article class="panel"><h3>Register model release</h3><form class="form-grid compact" onsubmit="registerModel(event)"><label>Model<input name="model" required></label><label>Version<input name="modelVersion" required></label><label>Validated intended use<input name="intendedUse" required></label><button class="button">Register pending release</button></form></article>` : ''}
+      ${state.user.role === 'clinician' ? `<article class="panel"><h3>Record independent evaluation</h3><form class="form-grid compact" onsubmit="evaluateModel(event)"><label>Release UUID<input name="releaseId" required></label><label>Evaluation set SHA-256<input name="evaluationSetSha256" minlength="64" maxlength="64" required></label><label>Grounded citation rate<input name="groundedCitationRate" type="number" min="0" max="1" step="0.01" required></label><label>Minimum grounded rate<input name="minimumGroundedRate" type="number" min="0" max="1" step="0.01" required></label><label>Unsafe recommendation rate<input name="unsafeRecommendationRate" type="number" min="0" max="1" step="0.01" required></label><label>Maximum unsafe rate<input name="maximumUnsafeRate" type="number" min="0" max="1" step="0.01" required></label><label>Evidence URI<input name="evidenceUri" type="url" required></label><label>Decision<select name="passed"><option value="true">Pass</option><option value="false">Fail</option></select></label><button class="button">Record evaluation</button></form></article>` : ''}
+      <article class="panel"><h3>Model releases</h3><div class="table-wrap"><table><thead><tr><th>ID</th><th>Model/version</th><th>Intended use</th><th>Status</th></tr></thead><tbody>${models.map((model) => `<tr><td>${esc(model.id)}</td><td>${esc(model.model)} ${esc(model.model_version)}</td><td>${esc(model.intended_use)}</td><td>${esc(model.status)}</td></tr>`).join('')}</tbody></table></div></article>
+      <article class="panel">
+        <h3>Record grounded draft</h3>
+        <form class="form-grid" onsubmit="generateAiReview(event)">
+          <label>Patient UUID<input name="patientId" required></label><label>Intended use<input name="intendedUse" value="care-team case review" required></label>
+          <label>Model<input name="model" required></label><label>Model version<input name="modelVersion" required></label>
+          <label>Uncertainty<select name="uncertainty"><option>medium</option><option>low</option><option>high</option></select></label>
+          <label>Prompt<input name="prompt" required></label><label>Output<input name="output" required></label>
+          <label>Evidence title<input name="evidenceTitle" required></label><label>Evidence URI<input name="evidenceUri" type="url" required></label>
+          <label>Supporting excerpt<input name="evidenceExcerpt" required></label><button class="button" type="submit">Record non-actionable draft</button>
+        </form>
+      </article>
+      <article class="panel"><h3>Review queue</h3><div class="table-wrap"><table><thead><tr><th>Intended use</th><th>Model</th><th>Uncertainty</th><th>Status</th><th>Independent decision</th></tr></thead><tbody>
+        ${reviews.map((review) => `<tr><td>${esc(review.intended_use)}</td><td>${esc(review.model)} ${esc(review.model_version)}</td><td><span class="pill ${statusClass(review.uncertainty)}">${esc(review.uncertainty)}</span></td><td>${esc(review.status)}</td><td>${review.status === 'draft' && state.user.role === 'clinician' && review.created_by !== state.user.subject ? `<button class="button" onclick="decideAi('${review.id}','approved')">Approve</button> <button class="button danger" onclick="decideAi('${review.id}','rejected')">Reject</button>` : 'Awaiting independent clinician'}</td></tr>`).join('')}
+      </tbody></table></div></article>
     </section>
   `;
 }
@@ -491,8 +530,14 @@ async function refresh() {
 }
 
 async function load() {
-  if (!state.user) return renderLogin();
-  await refresh();
+  try {
+    const session = await api('/api/session');
+    state.user = session.user;
+    await refresh();
+  } catch (_error) {
+    state.user = null;
+    renderLogin();
+  }
 }
 
 load().catch((error) => {

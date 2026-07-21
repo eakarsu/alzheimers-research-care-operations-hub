@@ -4,10 +4,21 @@
   "private": true,
   "description": "Sidebar-based Alzheimer's research, clinical trial, care coordination, and monitoring operations hub.",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "build": "node --check src/server.js && node --check src/app.js && node --check public/app.js",
+    "check": "node src/cli.js check",
+    "migrate": "node src/cli.js migrate",
+    "create-admin": "node scripts/create-local-admin.js",
     "health": "node -e \"fetch('http://localhost:5311/api/health').then(r=>r.json()).then(console.log)\"",
-    "test": "node scripts/smoke-test.js"
+    "test": "node --test test/*.test.js",
+    "test:integration": "node --test test/integration.test.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.6.1",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "pg": "^8.16.3"
   },
   "engines": {
     "node": ">=18"

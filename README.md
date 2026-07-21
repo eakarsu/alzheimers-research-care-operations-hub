@@ -1,86 +1,44 @@
 # Alzheimer's Research & Care Operations Hub
 
-A standalone sidebar app for Alzheimer's research operations, clinical trial matching, neurology care coordination, biomarker tracking, remote monitoring, caregiver support, medication safety, evidence review, compliance, and AI-assisted workflow drafting.
+A tenant-scoped clinical and research operations service for patient records, cognitive timelines, trial coordination, biomarkers, remote monitoring, caregiver work, consent, documents, and governed AI review.
 
-This app is designed as an operational and research-support platform. It is not a diagnostic device and does not replace licensed clinical judgment.
+This software supports operations; it is not a diagnostic device. Diagnosis, treatment, enrollment, and medication decisions remain with licensed clinicians.
 
-## Run
+## Security and data architecture
 
-```bash
-cd /Users/erolakarsu/external/projects/alzheimers-research-care-operations-hub
-chmod +x start.sh
-./start.sh
-```
+- Organization OIDC/SAML gateway authentication using short-lived RS256 tokens, issuer/audience validation, and mandatory MFA.
+- Least-privilege `administrator`, `clinician`, `coordinator`, `researcher`, and `caregiver` roles. Caregiver access is limited to current assignments; research views and exports are de-identified.
+- Transactional PostgreSQL records scoped by tenant, encrypted clinical payloads, optimistic concurrency, correction lineage, and append-only audit events.
+- Purpose-specific consent with expiration and revocation propagation.
+- FHIR and object-store provider jobs with idempotency, retry/dead-letter state, signed callback verification, and replay protection.
+- Document checksums, retention dates, legal holds, monitored exports, incident records, and restoration evidence.
+- Clinical AI model release controls, recorded evaluation sets and thresholds, grounded citations, uncertainty, model/version lineage, and independent clinician approval.
 
-Open:
+## Local verification
 
-```text
-http://localhost:5311
-```
-
-## Implemented Features
-
-- Sidebar app shell with dashboard and feature navigation
-- Feature/subfeature drill-downs
-- Seeded datasets with at least 15 records per major operational table
-- Patient registry and longitudinal cognitive timeline
-- Trial matching and recruitment operations
-- Biomarker, imaging, lab, and report workspace
-- Neurology scribe and cognitive assessment documentation
-- Remote patient monitoring and safety events
-- Caregiver support and care-plan tasks
-- Medication reconciliation, interactions, and adverse-event tracking
-- Research evidence and study tracker
-- Professional AI Center view that summarizes AI outputs instead of showing raw JSON
-- Consent, audit, governance, and compliance workflows
-- Reports and export-ready operational summaries
-- Login with demo users and role labels
-- Persistent local JSON store in `data/store.local.json`
-- Create, edit, and delete records from the UI
-- CSV export endpoints for every operational table
-- Document upload metadata workflow
-- Task queue and notification management
-- Real-AI-ready OpenRouter endpoint with local fallback
-- Smoke test covering login, CRUD, upload, and export
-
-## Demo Logins
-
-```text
-admin@alzheimers.local / admin123
-clinician@alzheimers.local / clinician123
-coordinator@alzheimers.local / coordinator123
-```
-
-## Test
+Node.js 18+ and PostgreSQL are required.
 
 ```bash
+npm ci
+cp .env.example .env
+# Replace every placeholder and point DATABASE_URL at a disposable database.
+ALLOW_SCHEMA_MIGRATION=1 ./start.sh migrate
+./start.sh check
 npm test
+./start.sh start
 ```
 
-The test starts a temporary local server and checks health, login, CRUD, upload, and CSV export.
+`npm test` always runs the unit, authorization, cryptography, consent, AI, callback, and provider-failure tests. Set `TEST_DATABASE_URL` to also run the real HTTP/PostgreSQL end-to-end test. That test applies the migration twice and covers MFA rejection, all five roles, tenant isolation, caregiver assignments, patient identity collision, consent revocation, correction conflicts, provider replay/failure, signed callback replay, AI evaluation/approval, de-identified exports, restore evidence, and audit immutability.
 
-## Source Apps To Reuse Later
+The app never auto-migrates and never kills another process. Startup fails closed when secrets, TLS database mode in production, database access, or schema state are invalid.
 
-The app is intentionally separated, but it can later integrate modules or data models from:
+## API workflow
 
-- `AIClinicalTrialMatching`
-- `AIPharmaTrialDesigner`
-- `AIAcceleratedrug`
-- `AIRemotePatientMonitoring`
-- `AIElderCareCompanion`
-- `AIHealthcareCompanion`
-- `AIDrugInteractionChecker`
-- `ai-medical-scribe-practice-suite`
-- `ai-personalized-medicine`
-- `clinical-life-sciences-suite`
-- `biotech-research-operations-suite`
-- `medical-device-quality-suite`
-- `patient-access-scheduling-suite`
+1. An authorized coordinator creates or identity-matches a patient.
+2. A clinician or coordinator records purpose-scoped consent.
+3. Clinical records, object reservations, and FHIR provider jobs require current consent and retain provenance.
+4. An administrator registers an AI model release; a different clinician records its evaluation evidence and pass/fail decision.
+5. Authorized users record grounded AI drafts. A different clinician approves or rejects each draft exactly once.
+6. Administrators monitor immutable audit and exports, legal holds, incidents, dead letters, and restore drills.
 
-## Safety Boundary
-
-Use this app for workflow support, research operations, patient coordination, and documentation. Any diagnosis, risk score, treatment plan, medication change, or trial recommendation requires licensed clinical review, patient consent, and regulatory validation before production use.
-
-## Remaining Production Hardening
-
-The app now has a complete feature surface for local operations and demos. For a real clinical deployment, replace demo login with a production identity provider, move persistence from JSON to Postgres, add encrypted file storage, configure HIPAA infrastructure controls, and validate all AI workflows under clinical governance.
+See [RUNBOOK.md](RUNBOOK.md) for deployment, HIPAA responsibility boundaries, provider recovery, retention, legal hold, incident response, and remaining external production dependencies.
