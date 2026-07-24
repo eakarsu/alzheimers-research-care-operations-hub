@@ -91,6 +91,61 @@ function createApp({ config, pool, provider }) {
   });
 
   app.get('/api/session', (req, res) => res.json({ user: req.principal }));
+  app.get('/api/auth/me', (req, res) => res.json({ user: req.principal }));
+
+  app.post('/api/application-ai/clinical-operations-review', requirePermission('*'), async (req, res, next) => {
+    try {
+      const prompt = String(req.body?.prompt || '').trim();
+      if (prompt.length < 20 || prompt.length > 12000) throw httpError(400, 'prompt must contain 20 to 12000 characters');
+      const apiKey = process.env.OPENROUTER_API_KEY;
+      const model = process.env.OPENROUTER_MODEL;
+      const baseUrl = process.env.OPENROUTER_BASE_URL;
+      if (!apiKey || !model || baseUrl !== 'https://openrouter.ai/api/v1') throw httpError(503, 'OpenRouter is not configured');
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Number(process.env.OPENROUTER_TIMEOUT_MS || 180000));
+      let providerResponse;
+      try {
+        providerResponse = await fetch(`${baseUrl}/chat/completions`, {
+          method: 'POST',
+          signal: controller.signal,
+          headers: {
+            authorization: `Bearer ${apiKey}`,
+            'content-type': 'application/json',
+            'http-referer': `http://${config.host}:${config.port}`,
+            'x-title': "Alzheimer's Research & Care Operations Hub",
+          },
+          body: JSON.stringify({
+            model,
+            messages: [
+              { role: 'system', content: 'You support bounded clinical operations review. Do not diagnose, prescribe, enroll, or change care. Require licensed human review, grounded evidence, and explicit uncertainty.' },
+              { role: 'user', content: prompt },
+            ],
+            temperature: 0.1,
+            max_tokens: 1800,
+          }),
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+      if (!providerResponse.ok) throw httpError(502, `OpenRouter returned ${providerResponse.status}`);
+      const payload = await providerResponse.json();
+      const result = payload?.choices?.[0]?.message?.content;
+      const providerReceipt = providerResponse.headers.get('x-request-id') || payload?.id;
+      if (typeof result !== 'string' || !result.trim() || !providerReceipt) throw httpError(502, 'OpenRouter returned an incomplete response');
+
+      const saved = await transaction(pool, req.principal, async (client) => {
+        const inserted = await client.query(
+          `INSERT INTO runtime_ai_results(tenant_id,actor_subject,prompt_sha256,model,provider_receipt,result,usage)
+           VALUES($1,$2,$3,$4,$5,$6,$7::jsonb) RETURNING id,created_at`,
+          [req.principal.tenantId, req.principal.subject, digest(prompt), payload.model || model, providerReceipt, result, JSON.stringify(payload.usage || {})]
+        );
+        await audit(client, req.principal, 'runtime-ai.generated', 'runtime-ai-result', inserted.rows[0].id, 'clinical-operations-review', { model: payload.model || model, providerReceipt });
+        return inserted.rows[0];
+      });
+      res.json({ id: saved.id, createdAt: saved.created_at, model: payload.model || model, result, usage: payload.usage || {}, actionable: false });
+    } catch (error) { next(error); }
+  });
 
   app.get('/api/bootstrap', async (req, res, next) => {
     try {

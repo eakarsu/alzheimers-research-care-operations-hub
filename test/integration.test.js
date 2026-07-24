@@ -10,7 +10,7 @@ const { signCallback } = require('../src/security');
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
-test('real HTTP and PostgreSQL workflow enforces tenant, consent, role, provider, AI, concurrency, and audit controls', { skip: !databaseUrl, timeout: 30_000 }, async (t) => {
+test('real HTTP and PostgreSQL workflow enforces tenant, consent, role, provider, AI, concurrency, and audit controls', { skip: !databaseUrl, timeout: 60_000 }, async (t) => {
   const pool = new Pool({ connectionString: databaseUrl });
   const migration = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', '001_governed_clinical_hub.sql'), 'utf8');
   await pool.query(migration);

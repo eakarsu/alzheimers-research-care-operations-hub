@@ -24,9 +24,10 @@ async function main() {
     }
     if (command === 'migrate') {
       if (!config.allowMigration) throw new Error('Refusing schema mutation unless ALLOW_SCHEMA_MIGRATION=1');
-      const migration = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', '001_governed_clinical_hub.sql'), 'utf8');
-      await pool.query(migration);
-      console.log('Migration applied successfully');
+      const migrationDirectory = path.join(__dirname, '..', 'db', 'migrations');
+      const migrations = fs.readdirSync(migrationDirectory).filter((name) => name.endsWith('.sql')).sort();
+      for (const name of migrations) await pool.query(fs.readFileSync(path.join(migrationDirectory, name), 'utf8'));
+      console.log(`${migrations.length} migrations applied successfully`);
       return;
     }
     throw new Error(`Unknown command: ${command}`);
