@@ -39,6 +39,14 @@ function createApp({ config, pool, provider }) {
     try { await pool.query('SELECT 1'); res.json({ ok: true, app: 'alzheimers-research-care-operations-hub', database: 'reachable' }); }
     catch (error) { next(Object.assign(error, { status: 503 })); }
   });
+  app.get('/api/auth/demo-credentials', (_req, res) => {
+    if (process.env.NODE_ENV === 'production') return res.status(404).json({ error: 'Not found' });
+    const email = process.env.PROVISION_ADMIN_EMAIL || process.env.ADMIN_EMAIL || '';
+    const password = process.env.PROVISION_ADMIN_PASSWORD || process.env.ADMIN_PASSWORD || '';
+    if (!email || !password) return res.status(503).json({ error: 'Demo credentials unavailable' });
+    res.set('cache-control', 'no-store');
+    return res.json({ email, password });
+  });
   app.get('/api/runtime-config', (_req, res) => res.json({ loginUrl: '/api/auth/sso', auth: 'OIDC/SAML gateway with MFA', sessionStorage: 'secure HttpOnly cookie' }));
   app.get('/api/auth/sso', (_req, res) => res.redirect(303, config.oidcLoginUrl));
   app.post('/api/auth/logout', (_req, res) => { res.clearCookie('alz_session', { httpOnly: true, secure: config.production, sameSite: 'strict' }); res.status(204).end(); });
