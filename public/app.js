@@ -7,6 +7,7 @@ const state = {
   status: 'all',
   formMode: 'view',
   form: {},
+  runtimeConfig: null,
   user: null,
   token: sessionStorage.getItem('alz_token') || ''
 };
@@ -42,7 +43,25 @@ async function api(path, options = {}) {
 
 async function login(event) {
   event.preventDefault();
-  window.location.assign('/api/auth/sso');
+  if (state.runtimeConfig?.auth !== 'local-password') {
+    window.location.assign('/api/auth/sso');
+    return;
+  }
+  const form = event.target;
+  const result = await api('/api/auth/login', {
+    method: 'POST',
+    body: JSON.stringify({ email: form.email.value, password: form.password.value })
+  });
+  state.token = result.token;
+  state.user = result.user;
+  sessionStorage.setItem('alz_token', result.token);
+  await refresh();
+}
+
+async function fillDemoCredentials() {
+  const credentials = await api('/api/auth/demo-credentials');
+  document.getElementById('login-email').value = credentials.email;
+  document.getElementById('login-password').value = credentials.password;
 }
 
 async function logout() {
@@ -104,14 +123,23 @@ function statusClass(value) {
 
 function renderLogin() {
   document.getElementById('app').className = 'auth-screen';
+  const localLogin = state.runtimeConfig?.auth === 'local-password';
   document.getElementById('app').innerHTML = `
     <main class="login-panel">
       <div class="brand-mark">AD</div>
       <h1>Alzheimer's Research & Care Hub</h1>
       <p class="muted">Sign in to manage registry, trials, documents, care operations, and AI review workflows.</p>
       <form onsubmit="login(event)" class="login-form">
-        <button class="button" type="submit">Continue with organization SSO</button>
-        <div class="login-error">MFA and your assigned least-privilege role are required.</div>
+        ${localLogin ? `
+          <label>Email<input id="login-email" name="email" type="email" required></label>
+          <label>Password<input id="login-password" name="password" type="password" required></label>
+          <button class="button" type="button" onclick="fillDemoCredentials()">Auto Fill Demo Credentials</button>
+          <button class="button" type="submit">Sign In</button>
+          <div class="login-error">Local validation only. Production requires organization SSO and MFA.</div>
+        ` : `
+          <button class="button" type="submit">Continue with organization SSO</button>
+          <div class="login-error">MFA and your assigned least-privilege role are required.</div>
+        `}
       </form>
     </main>
   `;
@@ -530,6 +558,7 @@ async function refresh() {
 }
 
 async function load() {
+  state.runtimeConfig = await api('/api/runtime-config');
   try {
     const session = await api('/api/session');
     state.user = session.user;

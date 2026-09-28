@@ -47,7 +47,9 @@ function createApp({ config, pool, provider }) {
     res.set('cache-control', 'no-store');
     return res.json({ email, password });
   });
-  app.get('/api/runtime-config', (_req, res) => res.json({ loginUrl: '/api/auth/sso', auth: 'OIDC/SAML gateway with MFA', sessionStorage: 'secure HttpOnly cookie' }));
+  app.get('/api/runtime-config', (_req, res) => res.json(config.allowLocalPasswordAuth
+    ? { loginUrl: '/api/auth/login', auth: 'local-password', sessionStorage: 'short-lived bearer token' }
+    : { loginUrl: '/api/auth/sso', auth: 'OIDC/SAML gateway with MFA', sessionStorage: 'secure HttpOnly cookie' }));
   app.get('/api/auth/sso', (_req, res) => res.redirect(303, config.oidcLoginUrl));
   app.post('/api/auth/logout', (_req, res) => { res.clearCookie('alz_session', { httpOnly: true, secure: config.production, sameSite: 'strict' }); res.status(204).end(); });
   app.post('/api/auth/login', async (req, res, next) => {
