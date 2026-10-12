@@ -1,0 +1,131 @@
+{
+  "title": "Clinical operations advisory",
+  "features": [
+    {
+      "id": "native-review",
+      "endpoint": "/api/application-ai/clinical-operations-review",
+      "title": "Operations review",
+      "description": "Administrator-only bounded operations advice. Do not include identifiable patient information. This provider response does not register a model release, evaluate a clinical model, record a patient draft, or approve care.",
+      "fields": [
+        {
+          "key": "prompt",
+          "label": "Prompt",
+          "type": "text",
+          "required": true,
+          "presets": [
+            "Summarize which operational evidence the care team should review before its weekly coordination meeting; flag gaps and route clinical decisions to licensed clinicians.",
+            "Compare practical options for tracking unresolved trial eligibility questions and identify what the research coordinator should verify with the study team.",
+            "Outline how to audit caregiver follow-up workflow for missed handoffs, while keeping all patient-level decisions with the clinical team."
+          ]
+        },
+        {
+          "key": "goal",
+          "label": "Goal",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Prepare a concise coordination brief for the weekly care team meeting.",
+            "Create a decision support checklist for trial referral operations.",
+            "Identify process improvements for caregiver communication follow-up."
+          ]
+        },
+        {
+          "key": "context",
+          "label": "Context",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "A multidisciplinary team is reviewing visit follow-up, caregiver communication, and trial referral workflow without patient identifiers.",
+            "The referral team has incomplete source documentation and needs a repeatable review process; no individual eligibility decision is requested.",
+            "Operations staff want to review handoff timing, task ownership, and escalation paths at a process level."
+          ]
+        },
+        {
+          "key": "audience",
+          "label": "Audience",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Care coordinators and a supervising clinician.",
+            "Research coordinators and the principal investigator.",
+            "Care operations lead and clinical supervisor."
+          ]
+        },
+        {
+          "key": "source_summary",
+          "label": "Source summary",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Use only the non-identifiable workflow facts entered here; identify any source that needs verification.",
+            "Treat protocol criteria and site availability as unverified until checked against current study materials.",
+            "Use workflow descriptions supplied in this prompt; list records to inspect rather than assuming their contents."
+          ]
+        },
+        {
+          "key": "constraints",
+          "label": "Constraints",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Do not diagnose, prescribe, enroll anyone, or recommend a care change; mark uncertainty and require clinician review.",
+            "Do not infer eligibility or promise enrollment; cite verification steps and escalation owners.",
+            "No patient identifiers, diagnosis, treatment advice, or autonomous outreach."
+          ]
+        },
+        {
+          "key": "budget",
+          "label": "Budget",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Existing staff time only; no new spend is authorized.",
+            "Use existing research coordination capacity.",
+            "No additional tools or paid services assumed."
+          ]
+        },
+        {
+          "key": "deadline",
+          "label": "Deadline",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Before the next weekly coordination meeting.",
+            "Ahead of the next referral review.",
+            "For the monthly operations review."
+          ]
+        },
+        {
+          "key": "tone",
+          "label": "Tone",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Clear, cautious, and operational.",
+            "Neutral and precise.",
+            "Practical and respectful."
+          ]
+        },
+        {
+          "key": "output_format",
+          "label": "Output format",
+          "type": "text",
+          "required": false,
+          "presets": [
+            "Sections for known facts, missing evidence, proposed checks, owners, and uncertainty.",
+            "Comparison table with option, evidence needed, owner, risk, and next step.",
+            "Short executive summary followed by a handoff checklist and an uncertainty section."
+          ]
+        }
+      ]
+    }
+  ],
+  "resources": [
+    {
+      "key": "runtimeResults",
+      "label": "Saved operations reviews",
+      "endpoint": "/api/application-ai/results",
+      "fields": []
+    }
+  ]
+}

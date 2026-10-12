@@ -157,6 +157,25 @@ function createApp({ config, pool, provider }) {
     } catch (error) { next(error); }
   });
 
+  app.get('/api/application-ai/results', requirePermission('*'), async (req, res, next) => {
+    try {
+      const rows = await pool.query(`SELECT id,created_at,model,result,usage FROM runtime_ai_results
+        WHERE tenant_id=$1 AND actor_subject=$2 ORDER BY created_at DESC LIMIT 100`,
+      [req.principal.tenantId, req.principal.subject]);
+      res.json({ rows: rows.rows });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/application-ai/results/:id', requirePermission('*'), async (req, res, next) => {
+    try {
+      const rows = await pool.query(`SELECT id,created_at,model,result,usage FROM runtime_ai_results
+        WHERE tenant_id=$1 AND actor_subject=$2 AND id=$3`,
+      [req.principal.tenantId, req.principal.subject, req.params.id]);
+      if (!rows.rowCount) throw httpError(404, 'AI result not found');
+      res.json({ record: rows.rows[0] });
+    } catch (error) { next(error); }
+  });
+
   app.get('/api/bootstrap', async (req, res, next) => {
     try {
       const output = await transaction(pool, req.principal, async (client) => {
@@ -498,6 +517,17 @@ function createApp({ config, pool, provider }) {
         return result.rows[0];
       });
       res.status(201).json({ review: row, actionable: false });
+    } catch (error) { next(error); }
+  });
+
+  app.get('/api/ai/reviews/:id', requirePermission('ai:draft'), async (req, res, next) => {
+    try {
+      const rows = await pool.query(`SELECT id,patient_id,intended_use,model,model_version,encrypted_output,
+        evidence,uncertainty,status,created_at,decided_at,decision_reason FROM ai_reviews
+        WHERE tenant_id=$1 AND id=$2`, [req.principal.tenantId, req.params.id]);
+      if (!rows.rowCount || !visiblePatient(req.principal, rows.rows[0].patient_id)) throw httpError(404, 'AI review not found');
+      const { encrypted_output, ...review } = rows.rows[0];
+      res.json({ review: { ...review, output: decryptJson(encrypted_output, config.encryptionKey) } });
     } catch (error) { next(error); }
   });
 

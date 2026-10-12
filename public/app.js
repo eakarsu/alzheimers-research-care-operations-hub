@@ -1,3 +1,4 @@
+let nativeAdvisory=null;
 const state = {
   boot: null,
   active: 'dashboard',
@@ -59,12 +60,19 @@ async function login(event) {
 }
 
 async function fillDemoCredentials() {
-  const credentials = await api('/api/auth/demo-credentials');
-  document.getElementById('login-email').value = credentials.email;
-  document.getElementById('login-password').value = credentials.password;
+  const status = document.getElementById('login-demo-status');
+  try {
+    const credentials = await api('/api/auth/demo-credentials');
+    document.getElementById('login-email').value = credentials.email;
+    document.getElementById('login-password').value = credentials.password;
+    status.textContent = 'Demo credentials filled. Select Sign In to continue.';
+  } catch (error) {
+    status.textContent = error.message;
+  }
 }
 
 async function logout() {
+  nativeAdvisory?.destroy();nativeAdvisory=null;
   await fetch('/api/auth/logout', { method: 'POST' });
   sessionStorage.removeItem('alz_token');
   state.user = null;
@@ -133,7 +141,8 @@ function renderLogin() {
         ${localLogin ? `
           <label>Email<input id="login-email" name="email" type="email" required></label>
           <label>Password<input id="login-password" name="password" type="password" required></label>
-          <button class="button" type="button" onclick="fillDemoCredentials()">Auto Fill Demo Credentials</button>
+          <button class="button" type="button" onclick="fillDemoCredentials()">Fill Demo Credentials</button>
+          <p id="login-demo-status" role="status"></p>
           <button class="button" type="submit">Sign In</button>
           <div class="login-error">Local validation only. Production requires organization SSO and MFA.</div>
         ` : `
@@ -462,8 +471,38 @@ async function generateAiReview(event) {
       evidence: [{ title: form.get('evidenceTitle'), uri: form.get('evidenceUri'), excerpt: form.get('evidenceExcerpt') }]
     })
   });
-  alert(`Draft ${result.review.id} recorded. It is not actionable until independent clinician approval.`);
   await refresh();
+  await openAiReview(result.review.id);
+}
+
+function fillDraftExample(form, index) {
+  const examples = [
+    { intendedUse: 'care-team case review', prompt: 'Summarize the source evidence for a care-team review and identify open questions. Do not recommend a clinical action.', output: 'Illustrative draft: evidence review is pending. The clinician must independently verify source facts before any care decision.', uncertainty: 'high' },
+    { intendedUse: 'trial referral review', prompt: 'Identify trial referral questions that require protocol and clinician verification.', output: 'Illustrative draft: eligibility and site availability remain unverified. Refer these questions to the research team.', uncertainty: 'high' },
+    { intendedUse: 'caregiver follow-up review', prompt: 'Identify communication handoffs for the care team to check against source records.', output: 'Illustrative draft: review the documented handoff sequence and unresolved tasks with a licensed clinician.', uncertainty: 'medium' }
+  ];
+  const example = examples[index];
+  for (const [key, value] of Object.entries(example)) form.elements[key].value = value;
+  const patient = (state.boot.data.patients || []).find(row => row.id === form.elements.patientId.value) || state.boot.data.patients?.[0];
+  form.elements.patientId.value = patient ? patient.id : '';
+  const release = (state.boot.data.aiModels || []).find(row => row.status === 'approved' && row.model === form.elements.model.value && row.model_version === form.elements.modelVersion.value)
+    || (state.boot.data.aiModels || []).find(row => row.status === 'approved');
+  form.elements.model.value = release ? release.model : '';
+  form.elements.modelVersion.value = release ? release.model_version : '';
+  const missing = [];
+  if (!patient) missing.push('a real patient record');
+  if (!release) missing.push('an approved evaluated model release');
+  if (!form.elements.evidenceTitle.value || !form.elements.evidenceUri.value || !form.elements.evidenceExcerpt.value) missing.push('actual evidence title, source URI, and supporting excerpt');
+  form.querySelector('[data-draft-status]').textContent = missing.length
+    ? 'Example filled. Supply ' + missing.join('; ') + ' before recording.'
+    : 'Example filled. Review all fields before recording.';
+}
+
+async function openAiReview(id) {
+  const detail = await api(`/api/ai/reviews/${encodeURIComponent(id)}`);
+  const target = document.getElementById('ai-review-detail');
+  target.innerHTML = `<h3>Saved draft detail</h3>${window.BrowserAIReport.render(detail.review)}`;
+  target.hidden = false;
 }
 
 async function decideAi(id, decision) {
@@ -496,6 +535,7 @@ function renderAiCenter() {
   return `
     ${topbar('AI Center', 'Grounded drafts with model lineage, uncertainty, and a hard independent-clinician approval gate.', 'AI Governance')}
     <section class="content grid">
+      ${state.user.role === 'administrator' ? '<section id="native-advisory" class="native-vanilla-studio"></section>' : ''}
       <article class="panel"><strong>${esc(ai.mode)}</strong><p class="muted">${esc(ai.disclaimer)}</p></article>
       ${state.user.role === 'administrator' ? `<article class="panel"><h3>Register model release</h3><form class="form-grid compact" onsubmit="registerModel(event)"><label>Model<input name="model" required></label><label>Version<input name="modelVersion" required></label><label>Validated intended use<input name="intendedUse" required></label><button class="button">Register pending release</button></form></article>` : ''}
       ${state.user.role === 'clinician' ? `<article class="panel"><h3>Record independent evaluation</h3><form class="form-grid compact" onsubmit="evaluateModel(event)"><label>Release UUID<input name="releaseId" required></label><label>Evaluation set SHA-256<input name="evaluationSetSha256" minlength="64" maxlength="64" required></label><label>Grounded citation rate<input name="groundedCitationRate" type="number" min="0" max="1" step="0.01" required></label><label>Minimum grounded rate<input name="minimumGroundedRate" type="number" min="0" max="1" step="0.01" required></label><label>Unsafe recommendation rate<input name="unsafeRecommendationRate" type="number" min="0" max="1" step="0.01" required></label><label>Maximum unsafe rate<input name="maximumUnsafeRate" type="number" min="0" max="1" step="0.01" required></label><label>Evidence URI<input name="evidenceUri" type="url" required></label><label>Decision<select name="passed"><option value="true">Pass</option><option value="false">Fail</option></select></label><button class="button">Record evaluation</button></form></article>` : ''}
@@ -503,6 +543,7 @@ function renderAiCenter() {
       <article class="panel">
         <h3>Record grounded draft</h3>
         <form class="form-grid" onsubmit="generateAiReview(event)">
+          <div class="native-vanilla-controls"><button class="button secondary" type="button" onclick="fillDraftExample(this.form,0)">Care team example</button><button class="button secondary" type="button" onclick="fillDraftExample(this.form,1)">Trial referral example</button><button class="button secondary" type="button" onclick="fillDraftExample(this.form,2)">Caregiver follow-up example</button></div><p data-draft-status role="status"></p>
           <label>Patient UUID<input name="patientId" required></label><label>Intended use<input name="intendedUse" value="care-team case review" required></label>
           <label>Model<input name="model" required></label><label>Model version<input name="modelVersion" required></label>
           <label>Uncertainty<select name="uncertainty"><option>medium</option><option>low</option><option>high</option></select></label>
@@ -512,8 +553,9 @@ function renderAiCenter() {
         </form>
       </article>
       <article class="panel"><h3>Review queue</h3><div class="table-wrap"><table><thead><tr><th>Intended use</th><th>Model</th><th>Uncertainty</th><th>Status</th><th>Independent decision</th></tr></thead><tbody>
-        ${reviews.map((review) => `<tr><td>${esc(review.intended_use)}</td><td>${esc(review.model)} ${esc(review.model_version)}</td><td><span class="pill ${statusClass(review.uncertainty)}">${esc(review.uncertainty)}</span></td><td>${esc(review.status)}</td><td>${review.status === 'draft' && state.user.role === 'clinician' && review.created_by !== state.user.subject ? `<button class="button" onclick="decideAi('${review.id}','approved')">Approve</button> <button class="button danger" onclick="decideAi('${review.id}','rejected')">Reject</button>` : 'Awaiting independent clinician'}</td></tr>`).join('')}
+        ${reviews.map((review) => `<tr><td>${esc(review.intended_use)}</td><td>${esc(review.model)} ${esc(review.model_version)}</td><td><span class="pill ${statusClass(review.uncertainty)}">${esc(review.uncertainty)}</span></td><td>${esc(review.status)} ${['administrator','clinician'].includes(state.user.role) ? `<button class="button secondary" type="button" onclick="openAiReview('${review.id}')">View draft</button>` : ''}</td><td>${review.status === 'draft' && state.user.role === 'clinician' && review.created_by !== state.user.subject ? `<button class="button" onclick="decideAi('${review.id}','approved')">Approve</button> <button class="button danger" onclick="decideAi('${review.id}','rejected')">Reject</button>` : 'Awaiting independent clinician'}</td></tr>`).join('')}
       </tbody></table></div></article>
+      <article id="ai-review-detail" class="panel" hidden></article>
     </section>
   `;
 }
@@ -534,7 +576,7 @@ function renderReports() {
       </div>
       <div class="panel">
         <h3>Readiness Summary</h3>
-        <p class="muted">This hub now supports persistent data, editable workflows, document metadata, consent records, task queues, notifications, audit events, exports, and AI review generation with local fallback.</p>
+        <p class="muted">This hub now supports persistent data, editable workflows, document metadata, consent records, task queues, notifications, audit events, exports, and source-grounded draft recording with independent clinical review. Provider-backed operations advice requires a configured OpenRouter model and a permitted administrator.</p>
         <button class="button" onclick="window.print()">Print Report</button>
       </div>
     </section>
@@ -542,6 +584,7 @@ function renderReports() {
 }
 
 function render() {
+  nativeAdvisory?.destroy();nativeAdvisory=null;
   if (!state.user) return renderLogin();
   if (!state.boot) return;
   let inner;
@@ -550,10 +593,19 @@ function render() {
   else if (state.active === 'reports') inner = renderReports();
   else inner = renderModule(moduleById(state.active));
   renderShell(inner);
+  if(state.active==='ai-center'&&state.user.role==='administrator'){nativeAdvisory=window.NativeWorkflowStudio.mount({element:document.getElementById('native-advisory'),config:{"title":"Clinical operations advisory","features":[{"id":"native-review","endpoint":"/api/application-ai/clinical-operations-review","title":"Operations review","description":"Administrator-only bounded operations advice. Do not include identifiable patient information. This provider response does not register a model release, evaluate a clinical model, record a patient draft, or approve care.","fields":[{"key":"prompt","label":"Prompt","type":"text","required":true,"presets":["Summarize which operational evidence the care team should review before its weekly coordination meeting; flag gaps and route clinical decisions to licensed clinicians.","Compare practical options for tracking unresolved trial eligibility questions and identify what the research coordinator should verify with the study team.","Outline how to audit caregiver follow-up workflow for missed handoffs, while keeping all patient-level decisions with the clinical team."]},{"key":"goal","label":"Goal","type":"text","required":false,"presets":["Prepare a concise coordination brief for the weekly care team meeting.","Create a decision support checklist for trial referral operations.","Identify process improvements for caregiver communication follow-up."]},{"key":"context","label":"Context","type":"text","required":false,"presets":["A multidisciplinary team is reviewing visit follow-up, caregiver communication, and trial referral workflow without patient identifiers.","The referral team has incomplete source documentation and needs a repeatable review process; no individual eligibility decision is requested.","Operations staff want to review handoff timing, task ownership, and escalation paths at a process level."]},{"key":"audience","label":"Audience","type":"text","required":false,"presets":["Care coordinators and a supervising clinician.","Research coordinators and the principal investigator.","Care operations lead and clinical supervisor."]},{"key":"source_summary","label":"Source summary","type":"text","required":false,"presets":["Use only the non-identifiable workflow facts entered here; identify any source that needs verification.","Treat protocol criteria and site availability as unverified until checked against current study materials.","Use workflow descriptions supplied in this prompt; list records to inspect rather than assuming their contents."]},{"key":"constraints","label":"Constraints","type":"text","required":false,"presets":["Do not diagnose, prescribe, enroll anyone, or recommend a care change; mark uncertainty and require clinician review.","Do not infer eligibility or promise enrollment; cite verification steps and escalation owners.","No patient identifiers, diagnosis, treatment advice, or autonomous outreach."]},{"key":"budget","label":"Budget","type":"text","required":false,"presets":["Existing staff time only; no new spend is authorized.","Use existing research coordination capacity.","No additional tools or paid services assumed."]},{"key":"deadline","label":"Deadline","type":"text","required":false,"presets":["Before the next weekly coordination meeting.","Ahead of the next referral review.","For the monthly operations review."]},{"key":"tone","label":"Tone","type":"text","required":false,"presets":["Clear, cautious, and operational.","Neutral and precise.","Practical and respectful."]},{"key":"output_format","label":"Output format","type":"text","required":false,"presets":["Sections for known facts, missing evidence, proposed checks, owners, and uncertainty.","Comparison table with option, evidence needed, owner, risk, and next step.","Short executive summary followed by a handoff checklist and an uncertainty section."]}]}],"resources":[{"key":"runtimeResults","label":"Saved operations reviews","endpoint":"/api/application-ai/results","fields":[]}]},request:async(path,options={})=>{if(!options.body)return api(path,options);const input=JSON.parse(options.body);return api(path,{...options,body:JSON.stringify({prompt:Object.entries(input).map(([key,value])=>key.replaceAll('_',' ')+': '+value).join('\n\n')})});}});nativeAdvisory.setAuthenticated(true);}
 }
 
 async function refresh() {
-  state.boot = await api('/api/bootstrap');
+  const boot = await api('/api/bootstrap');
+  if (!boot.data || typeof boot.data !== 'object' || Array.isArray(boot.data)) throw new Error('Bootstrap response did not contain record data.');
+  for (const [key, payload] of Object.entries(boot.data)) {
+    if (Array.isArray(payload)) continue;
+    const rows = [payload?.data, payload?.rows, payload?.items].find(Array.isArray);
+    if (!rows) throw new Error(`${key} response did not contain a list.`);
+    boot.data[key] = rows;
+  }
+  state.boot = boot;
   render();
 }
 
