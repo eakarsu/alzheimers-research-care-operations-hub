@@ -42,21 +42,25 @@ async function api(path, options = {}) {
   return json;
 }
 
-async function login(event) {
-  event.preventDefault();
+async function signInWithCredentials(email, password) {
   if (state.runtimeConfig?.auth !== 'local-password') {
     window.location.assign('/api/auth/sso');
     return;
   }
-  const form = event.target;
   const result = await api('/api/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email: form.email.value, password: form.password.value })
+    body: JSON.stringify({ email, password })
   });
   state.token = result.token;
   state.user = result.user;
   sessionStorage.setItem('alz_token', result.token);
   await refresh();
+}
+
+async function login(event) {
+  event.preventDefault();
+  const form = event.target;
+  await signInWithCredentials(form.email.value, form.password.value);
 }
 
 async function fillDemoCredentials() {
@@ -65,9 +69,10 @@ async function fillDemoCredentials() {
     const credentials = await api('/api/auth/demo-credentials');
     document.getElementById('login-email').value = credentials.email;
     document.getElementById('login-password').value = credentials.password;
-    status.textContent = 'Demo credentials filled. Select Sign In to continue.';
+    status.textContent = 'Signing in with demo credentials...';
+    await signInWithCredentials(credentials.email, credentials.password);
   } catch (error) {
-    status.textContent = error.message;
+    if (status) status.textContent = error.message;
   }
 }
 
